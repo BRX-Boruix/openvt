@@ -72,11 +72,53 @@ fn request_path(id: usize, buf: &mut [u8]) -> &str {
     core::str::from_utf8(&buf[..len]).unwrap_or("")
 }
 
+/// Device node path (/devices/consoles/<id>): stack buffer join, zero-heap.
+/// Used to skip boot-time pre-created instances (node exists = in use).
+fn device_path(id: usize, buf: &mut [u8]) -> &str {
+    const PREFIX: &[u8] = b"/devices/consoles/";
+    let mut len = 0usize;
+    for b in PREFIX.iter() {
+        buf[len] = *b;
+        len += 1;
+    }
+    let mut digits = [0u8; 2];
+    let mut n = 0usize;
+    let mut v = id;
+    while v > 0 {
+        digits[n] = b'0' + (v % 10) as u8;
+        n += 1;
+        v /= 10;
+    }
+    let mut k = n;
+    while k > 0 {
+        k -= 1;
+        buf[len] = digits[k];
+        len += 1;
+    }
+    core::str::from_utf8(&buf[..len]).unwrap_or("")
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn user_main(_argc: isize, _argv: *const *const u8) -> i32 {
     out(b"[openvt] requesting a new console instance\n");
     let mut id = 1usize;
     while id < CONSOLES_MAX {
+        // Boot-time pre-created instances (0..CONSOLES_N-1) are already in
+        // use: skip ids whose device node exists (S13: node table = truth).
+        let mut devbuf = [0u8; 32];
+        let devpath = device_path(id, &mut devbuf);
+        match open(devpath, OpenFlags::READ_ONLY, Permissions::readonly()) {
+            Ok(fd) => {
+                let _ = close(fd);
+                id += 1;
+                continue;
+            }
+            Err(libsys::Error::NotFound) => {}
+            Err(_) => {
+                out(b"[openvt] FATAL: cannot probe /devices/consoles\n");
+                return 1;
+            }
+        }
         let mut buf = [0u8; 48];
         let path = request_path(id, &mut buf);
         // probe-then-create (S09 boundary): no O_EXCL bit in OpenFlags.
@@ -102,9 +144,6 @@ pub extern "C" fn user_main(_argc: isize, _argv: *const *const u8) -> i32 {
                 out_u64(id as u64);
                 out(b"; wait for init patrol log (instance N created)\n");
                 return 0;
-            }
-            Err(_) => {
-                id += 1;
             }
             Err(_) => {
                 out(b"[openvt] FATAL: cannot write request under /system/console-requests\n");
