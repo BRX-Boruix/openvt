@@ -46,6 +46,20 @@ fn out_u64(mut v: u64) {
     out(&buf[i..]);
 }
 
+/// 错误类别标签（S09 留证）：失败路径打可辨识类别而非裸 FATAL。
+/// 栈上字节、零堆。
+fn err_tag(e: libsys::Error) -> &'static str {
+    match e {
+        libsys::Error::NotFound => "NotFound",
+        libsys::Error::PermissionDenied => "PermissionDenied",
+        libsys::Error::AlreadyExists => "AlreadyExists",
+        libsys::Error::InvalidParam => "InvalidParam",
+        libsys::Error::NotDirectory => "NotDirectory",
+        libsys::Error::NoSpace => "NoSpace",
+        _ => "Other",
+    }
+}
+
 /// 请求文件路径（/system/console-requests/<id>）：栈缓冲拼接（零堆，S17）。
 /// 48 = 前缀 26 + 2 位数字（id<64）+ NUL 余量。
 fn request_path(id: usize, buf: &mut [u8]) -> &str {
@@ -145,8 +159,10 @@ pub extern "C" fn user_main(_argc: isize, _argv: *const *const u8) -> i32 {
                 out(b"; wait for init patrol log (instance N created)\n");
                 return 0;
             }
-            Err(_) => {
-                out(b"[openvt] FATAL: cannot write request under /system/console-requests\n");
+            Err(e) => {
+                out(b"[openvt] FATAL: cannot write request under /system/console-requests: ");
+                out(err_tag(e).as_bytes());
+                out(b"\n");
                 return 1;
             }
         }
