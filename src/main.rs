@@ -74,32 +74,44 @@ fn request_path(id: usize, buf: &mut [u8]) -> &str {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn user_main(_argc: isize, _argv: *const *const u8) -> i32 {
-    out(b"[openvt] requesting a new console instance
-");
+    out(b"[openvt] requesting a new console instance\n");
     let mut id = 1usize;
     while id < CONSOLES_MAX {
         let mut buf = [0u8; 48];
         let path = request_path(id, &mut buf);
+        // probe-then-create (S09 boundary): no O_EXCL bit in OpenFlags.
+        // Existing file = pending request for this id: skip, never
+        // CREATE_OR_TRUNCATE over someone else pending request.
+        // The init patrol ledger dedup remains authoritative (S13).
+        match open(path, OpenFlags::READ_ONLY, Permissions::readonly()) {
+            Ok(fd) => {
+                let _ = close(fd);
+                id += 1;
+                continue;
+            }
+            Err(libsys::Error::NotFound) => {}
+            Err(_) => {
+                out(b"[openvt] FATAL: cannot probe /system/console-requests\n");
+                return 1;
+            }
+        }
         match open(path, OpenFlags::CREATE_OR_TRUNCATE, Permissions::all()) {
             Ok(fd) => {
                 let _ = close(fd);
                 out(b"[openvt] request queued for instance ");
                 out_u64(id as u64);
-                out(b"; wait for init patrol log (instance N created)
-");
+                out(b"; wait for init patrol log (instance N created)\n");
                 return 0;
             }
-            Err(libsys::Error::AlreadyExists) => {
+            Err(_) => {
                 id += 1;
             }
             Err(_) => {
-                out(b"[openvt] FATAL: cannot write request under /system/console-requests
-");
+                out(b"[openvt] FATAL: cannot write request under /system/console-requests\n");
                 return 1;
             }
         }
     }
-    out(b"[openvt] no free console slot (cap 64)
-");
+    out(b"[openvt] no free console slot (cap 64)\n");
     1
 }
